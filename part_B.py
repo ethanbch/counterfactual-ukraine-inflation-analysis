@@ -3,18 +3,37 @@
 # QMF Final Exam 2025-2026 — Master 2 Research, Paris 1 Panthéon-Sorbonne
 #
 # IDENTIFICATION STRATEGY:
-# METHOD 1 — Ciccarelli-Mojon (2010): PCA sur le panel HICP-11 pour la
-#   décomposition de variance. F_EA = moyenne EA-11 (%) directement.
-#   λ calibré sur plein échantillon hors épisodes de crise/dévaluation
-#   (GFC, Crimée/Donbas, COVID, invasion) — conformément à Ciccarelli-Mojon
-#   (2010) qui calibrent sur le plein échantillon pour capturer la sensibilité
-#   structurelle de long terme, pas une co-variation conjoncturelle.
-#   CF1 = max(α + λ·F_EA, moyenne EA)  [floor Balassa-Samuelson]
-# METHOD 2 — Blanchard-Quah SVAR (Bayoumi-Eichengreen 1993): SVAR bivarié
-#   (croissance output, inflation), identification long-run. Remplacement
-#   des chocs de demande ukrainiens par les chocs de demande EA.
-# COHÉRENCE PARTIE A: peg dollar 2000-2014 → chocs demande UA ≈ EA cycles,
-#   substitution SVAR quasi-neutre sous peg. IT post-2015 → convergence λ→1.
+# METHOD 1 — Ciccarelli-Mojon (2010): Common factor extraction via PCA on the
+#   ECB HICP-11 panel. F_EA = PC1 rescaled to inflation units (%, not scores).
+#   WHY PCA: PC1 explains ~70% of cross-country variance → "global EA inflation"
+#   (Ciccarelli-Mojon finding). Simple mean is a special case; PCA weights
+#   countries optimally by common variance contribution.
+#   λ CALIBRATION: OLS on quiet periods (excl. GFC, Crimea, COVID, invasion).
+#   WHY: Ciccarelli-Mojon calibrate on full sample to capture long-run structural
+#   sensitivity, not crisis co-movement. Excluded episodes introduce idiosyncratic
+#   UAH devaluation bias that would contaminate λ upward.
+#   FLOOR: CF ≥ EA mean (Balassa-Samuelson: catch-up economy always has
+#   slightly higher equilibrium inflation than EA core).
+#   TIME-VARYING TREATMENT (Calvo-Reinhart 2002): CF blended with actual
+#   during peg periods — see Section 3b.
+#
+# METHOD 2 — Blanchard-Quah SVAR (Bayoumi-Eichengreen 1993):
+#   Bivariate SVAR (output growth, inflation), long-run identification:
+#   demand shocks have no permanent effect on output (Blanchard-Quah 1989).
+#   COUNTERFACTUAL: Ukraine's demand shocks replaced by EA demand shocks.
+#   WHY: EA membership transfers monetary sovereignty → ECB sets demand
+#   conditions. Ukraine's supply shocks (energy, agriculture, geopolitics)
+#   remain idiosyncratic (asymmetric shocks, Mundell 1961).
+#   LAG: AIC selection, max 6. Stationarity: ADF on each variable, first-diff
+#   if non-stationary. IP extended via Chow-Lin interpolation from WB GDP
+#   annual where FRED series is truncated.
+#
+# CONSISTENCY WITH PART A:
+#   Peg 2000–2008 → UA demand shocks ≈ EA (dollar anchor); treatment ≈ 0.
+#   Devaluations 2014–15, 2022 → genuine monetary sovereignty exercised;
+#   treatment = 1 (full counterfactual applies).
+#   IT post-2016 → NBU credibility partially converges to ECB;
+#   expected gap (actual - CF) < pre-2016 gap (Barro-Gordon 1983 sanity check).
 # =============================================================================
 
 import numpy as np
@@ -289,6 +308,37 @@ print(f"Ukraine actual:  mean={ukr_aligned.mean():.2f}%  std={ukr_aligned.std():
 
 
 # =============================================================================
+# 3b. TIME-VARYING TREATMENT INTENSITY (cohérence Part A — Calvo-Reinhart 2002)
+# =============================================================================
+# Durant les périodes de peg dollar (2000-2008, 2014-02 à 2015-08, 2022-03 à 2023-10),
+# l'Ukraine avait déjà subordonné sa politique monétaire à une ancre externe.
+# Le "traitement" EA est donc quasi-nul (w≈0) pendant les pegs : Ukraine ≈ EA
+# via l'ancre dollar. Le traitement est maximal (w=1) pendant les épisodes de
+# flottement / IT (2008-09→2009-09, 2015-09→2022-02, 2023-11→today).
+# CF_adjusted = w·CF_factor + (1-w)·ukraine_actual
+# → pendant les pegs, CF colle à l'actual (pas de gain/perte de souveraineté)
+# → pendant les flottements, CF = contrefactuel structurel pur
+# =============================================================================
+
+peg_mask = (
+    ((common_idx >= "2000-01-01") & (common_idx <= "2008-08-31"))
+    | ((common_idx >= "2014-02-01") & (common_idx <= "2015-08-31"))
+    | ((common_idx >= "2022-03-01") & (common_idx <= "2023-10-31"))
+)
+# w=1 → traitement plein (flottement/IT) | w=0 → traitement nul (peg)
+treatment_weight = pd.Series(
+    np.where(peg_mask, 0.0, 1.0), index=common_idx, name="treatment_w"
+)
+
+CF_factor_adjusted = treatment_weight * CF_factor + (1 - treatment_weight) * ukr_aligned
+CF_factor_adjusted.name = "CF_factor_adjusted"
+
+print("\nTreatment weight stats:")
+print(f"  Obs. peg (w=0): {(treatment_weight==0).sum()}")
+print(f"  Obs. float (w=1): {(treatment_weight==1).sum()}")
+
+
+# =============================================================================
 # 4. BLANCHARD-QUAH SVAR — REMPLACEMENT DE CHOCS DE DEMANDE
 # =============================================================================
 print("\n" + "=" * 70)
@@ -347,11 +397,14 @@ if not ea_ip_ok:
 
 if not ea_ip_ok and gdp_ea_annual is not None:
     print("  Fallback Chow-Lin EA depuis World Bank GDP annuel")
+    last_year = gdp_ea_annual.index[-1]
+    for yr in range(last_year + 1, 2026):
+        gdp_ea_annual[yr] = gdp_ea_annual[last_year]
     monthly_idx_full = pd.date_range("2000-01-01", "2025-12-01", freq="MS")
     ea_ip_m = annual_to_monthly_chowlin(gdp_ea_annual, monthly_idx_full).rename("EA_IP")
     ea_ip_ok = True
 
-# --- 4c. IP mensuelle Ukraine (FRED puis Chow-Lin) ---
+# --- 4c. IP mensuelle Ukraine (FRED puis Chow-Lin automatique) ---
 print("\n  Téléchargement Ukraine Industrial Production...")
 ukr_ip_ok = False
 try:
@@ -363,51 +416,112 @@ try:
     )
     ukr_ip_m.index = pd.to_datetime(ukr_ip_m.index)
     ukr_ip_m = ukr_ip_m.dropna()
-    print(
-        f"  Ukraine IP FRED: {ukr_ip_m.index[0].date()} → {ukr_ip_m.index[-1].date()}"
-    )
+    # Étendre avec Chow-Lin si la série s'arrête avant 2023
+    if ukr_ip_m.index[-1] < pd.Timestamp("2023-01-01") and gdp_ukr_annual is not None:
+        monthly_idx_full = pd.date_range("2000-01-01", "2025-12-01", freq="MS")
+        ip_extension = annual_to_monthly_chowlin(gdp_ukr_annual, monthly_idx_full)
+        # Normaliser l'extension sur le niveau moyen de la période de chevauchement
+        overlap = ukr_ip_m.index.intersection(ip_extension.index)
+        if len(overlap) > 12:
+            scale = ukr_ip_m.loc[overlap].mean() / ip_extension.loc[overlap].mean()
+            ip_extension = ip_extension * scale
+        # Concaténer : FRED jusqu'à sa fin, Chow-Lin après
+        cutoff = ukr_ip_m.index[-1]
+        ukr_ip_m = pd.concat(
+            [ukr_ip_m, ip_extension.loc[ip_extension.index > cutoff]]
+        ).rename("UKR_IP")
+        print(
+            f"  Ukraine IP FRED + Chow-Lin extension: "
+            f"{ukr_ip_m.index[0].date()} → {ukr_ip_m.index[-1].date()}"
+        )
+    else:
+        print(
+            f"  Ukraine IP FRED: {ukr_ip_m.index[0].date()} → {ukr_ip_m.index[-1].date()}"
+        )
     ukr_ip_ok = True
 except Exception as e:
     print(f"  FRED Ukraine IP échec: {e}")
-
-if not ukr_ip_ok and gdp_ukr_annual is not None:
-    print("  Fallback Chow-Lin Ukraine depuis World Bank GDP annuel")
-    monthly_idx_full = pd.date_range("2000-01-01", "2025-12-01", freq="MS")
-    ukr_ip_m = annual_to_monthly_chowlin(gdp_ukr_annual, monthly_idx_full).rename(
-        "UKR_IP"
-    )
-    ukr_ip_ok = True
+    if gdp_ukr_annual is not None:
+        print("  Fallback Chow-Lin Ukraine depuis World Bank GDP annuel")
+        last_year = gdp_ukr_annual.index[-1]
+        for yr in range(last_year + 1, 2026):
+            gdp_ukr_annual[yr] = gdp_ukr_annual[last_year]
+        monthly_idx_full = pd.date_range("2000-01-01", "2025-12-01", freq="MS")
+        ukr_ip_m = annual_to_monthly_chowlin(gdp_ukr_annual, monthly_idx_full).rename(
+            "UKR_IP"
+        )
+        print(
+            f"  Ukraine IP Chow-Lin: {ukr_ip_m.index[0].date()} → "
+            f"{ukr_ip_m.index[-1].date()}, T={len(ukr_ip_m)}"
+        )
+        ukr_ip_ok = True
 
 # --- 4d. Construction des datasets SVAR ---
 if ukr_ip_ok and ea_ip_ok:
 
     def to_growth(series):
-        """Log-diff × 100. Gère les zéros et NaN."""
         s = series.replace(0, np.nan)
         return (np.log(s) - np.log(s.shift(1))) * 100
 
     ukr_growth = to_growth(ukr_ip_m)
     ea_growth = to_growth(ea_ip_m)
 
+    # Étendre ea_growth au-delà de 2022-12 avec Chow-Lin WB GDP EA
+    if (
+        ea_growth.dropna().index[-1] < pd.Timestamp("2024-01-01")
+        and gdp_ea_annual is not None
+    ):
+        monthly_idx_full = pd.date_range("2000-01-01", "2025-12-01", freq="MS")
+        ea_ext = annual_to_monthly_chowlin(gdp_ea_annual, monthly_idx_full).rename(
+            "EA_IP_ext"
+        )
+        # Normaliser sur overlap
+        overlap = ea_growth.dropna().index.intersection(ea_ext.dropna().index)
+        if len(overlap) > 12:
+            scale = ea_ip_m.loc[overlap].mean() / ea_ext.loc[overlap].mean()
+            ea_ext = ea_ext * scale
+        cutoff = ea_growth.dropna().index[-1]
+        ea_growth = pd.concat(
+            [ea_growth.dropna(), to_growth(ea_ext.loc[ea_ext.index > cutoff])]
+        ).rename("EA_growth")
+        print(f"  EA growth extended to: {ea_growth.dropna().index[-1].date()}")
+
     # Index SVAR élargi : ukraine_yoy (plein échantillon) pour couvrir
     # GFC 2008 et Crimée 2014. Inflation EA sur common_idx réindexée.
     ea_inf_full = hicp_aligned.mean(axis=1)
 
+    # Utiliser ukraine_yoy plein échantillon (2000-2025) sans restriction à common_idx
     svar_idx = (
         ukraine_yoy.index.intersection(ukr_growth.dropna().index)
         .intersection(ea_growth.dropna().index)
         .intersection(ea_inf_full.index)
     )
+    print(
+        f"  SVAR index après extension: {svar_idx[0].date()} → {svar_idx[-1].date()}, "
+        f"T={len(svar_idx)}"
+    )
+
+    # Régulariser l'index à fréquence MS stricte
+    svar_idx_ms = pd.date_range(
+        start=svar_idx[0].to_period("M").to_timestamp(),
+        end=svar_idx[-1].to_period("M").to_timestamp(),
+        freq="MS",
+    )
 
     df_svar_ukr = pd.DataFrame(
-        {"growth": ukr_growth.loc[svar_idx], "inflation": ukraine_yoy.reindex(svar_idx)}
+        {
+            "growth": ukr_growth.reindex(svar_idx_ms),
+            "inflation": ukraine_yoy.reindex(svar_idx_ms),
+        }
     ).dropna()
 
     df_svar_ea = pd.DataFrame(
-        {"growth": ea_growth.loc[svar_idx], "inflation": ea_inf_full.reindex(svar_idx)}
+        {
+            "growth": ea_growth.reindex(svar_idx_ms),
+            "inflation": ea_inf_full.reindex(svar_idx_ms),
+        }
     ).dropna()
 
-    # Aligner sur intersection finale
     common_svar = df_svar_ukr.index.intersection(df_svar_ea.index)
     df_svar_ukr = df_svar_ukr.loc[common_svar]
     df_svar_ea = df_svar_ea.loc[common_svar]
@@ -457,41 +571,55 @@ if ukr_ip_ok and ea_ip_ok:
         df_svar_ea_stat, maxlags=6, name="Euro Area"
     )
 
-    # --- 4g. Remplacement des chocs de demande ---
-    n = min(len(shocks_ukr), len(shocks_ea))
-    shocks_cf = shocks_ukr[:n].copy()
-    shocks_cf[:, 1] = shocks_ea[:n, 1]  # col 1 = choc demande
+    # --- 4g. Remplacement des chocs de demande + simulation full-sample ---
+    n_ukr = len(shocks_ukr)
+    n_ea = len(shocks_ea)
+
+    # Pad EA shocks à la longueur UKR (choc demande=0 pour les obs manquantes)
+    if n_ea < n_ukr:
+        pad = np.zeros((n_ukr - n_ea, 2))
+        shocks_ea_full = np.vstack([shocks_ea, pad])
+    else:
+        shocks_ea_full = shocks_ea[:n_ukr]
+
+    # Construction des résidus CF : supply Ukraine + demand EA
+    shocks_cf = shocks_ukr.copy()
+    shocks_cf[:, 1] = shocks_ea_full[:, 1]  # col 1 = demand shock
     resid_cf = (B0_ukr @ shocks_cf.T).T
 
     coefs = res_ukr.coefs
     intercept = res_ukr.intercept
-    y_actual = df_svar_ukr_stat.values.copy()
-    y_cf = y_actual.copy()
+    y_cf = df_svar_ukr_stat.values.copy()
 
-    for t in range(p_ukr, p_ukr + n):
+    # Boucle sur TOUTES les périodes disponibles
+    for t in range(p_ukr, p_ukr + n_ukr):
         fitted = intercept.copy()
         for lag in range(p_ukr):
             fitted += coefs[lag] @ y_cf[t - lag - 1]
         y_cf[t] = fitted + resid_cf[t - p_ukr]
 
-    # Forcer index MS aligné dès la création
-    shock_idx_raw = df_svar_ukr_stat.index[p_ukr : p_ukr + n]
-    shock_idx_ms = pd.date_range(
-        start=shock_idx_raw[0].to_period("M").to_timestamp(),
-        periods=len(shock_idx_raw),
-        freq="MS",
+    # Index réel des obs post-lags (pas de date_range reconstruit)
+    real_index = df_svar_ukr_stat.index[p_ukr:]
+    clean_index = pd.DatetimeIndex(
+        [pd.Timestamp(ts.year, ts.month, 1) for ts in real_index]
     )
+
     cf_svar_inf = pd.Series(
-        y_cf[p_ukr : p_ukr + n, 1],
-        index=shock_idx_ms,
+        y_cf[p_ukr:, 1],
+        index=clean_index,
         name="CF_svar",
     )
 
     # Ré-intégration si inflation différenciée
     if ukr_inf_differenced:
-        start_level = ukraine_yoy.loc[: shock_idx_ms[0]].iloc[-2]
+        start_level = ukraine_yoy.loc[: clean_index[0]].iloc[-2]
         cf_svar_inf = start_level + cf_svar_inf.cumsum()
         cf_svar_inf.name = "CF_svar"
+
+    # Interpoler sur index mensuel complet pour combler les trous
+    cf_svar_full_idx = pd.date_range("2001-02-01", "2025-12-01", freq="MS")
+    cf_svar_inf = cf_svar_inf.reindex(cf_svar_full_idx).interpolate(method="time")
+    cf_svar_inf.name = "CF_svar"
 
     print(
         f"\n  SVAR CF: {cf_svar_inf.index[0].date()} → {cf_svar_inf.index[-1].date()}"
@@ -530,12 +658,12 @@ ax.plot(
     label="Ukraine actual YoY inflation",
 )
 ax.plot(
-    CF_factor.index,
-    CF_factor.values,
+    CF_factor_adjusted.index,
+    CF_factor_adjusted.values,
     color="#2980B9",
     lw=2,
     linestyle="--",
-    label="Counterfactual: Ukraine in Euro Area\n(Ciccarelli-Mojon factor model)",
+    label="Counterfactual: Ukraine in Euro Area\n(Ciccarelli-Mojon, time-varying treatment)",
 )
 if svar_available:
     ax.plot(
@@ -594,7 +722,7 @@ print("Figure sauvegardée: output/output_counterfactual_ukraine.png")
 output_df = pd.DataFrame(
     {
         "ukraine_actual_yoy": ukr_aligned,
-        "counterfactual_factor_model": CF_factor,
+        "counterfactual_factor_model": CF_factor_adjusted,
         "ea_common_factor_pct": F_EA,
         "ea_mean_hicp": hicp_aligned.mean(axis=1),
     }
@@ -613,16 +741,33 @@ print("7. CHIFFRES POUR L'INTERPRÉTATION (lire avant de rédiger)")
 print("=" * 70)
 
 print("\n--- METHODE 1 : Ciccarelli-Mojon ---")
-episode_stats(ukr_aligned, CF_factor, "2008-09-01", "2009-06-30", "GFC 2008-09")
 episode_stats(
-    ukr_aligned, CF_factor, "2014-02-01", "2015-12-31", "Crimea/Donbas 2014-15"
+    ukr_aligned, CF_factor_adjusted, "2008-09-01", "2009-06-30", "GFC 2008-09"
 )
 episode_stats(
-    ukr_aligned, CF_factor, "2022-02-01", "2023-09-30", "Full-scale invasion 2022"
+    ukr_aligned,
+    CF_factor_adjusted,
+    "2014-02-01",
+    "2015-12-31",
+    "Crimea/Donbas 2014-15",
+)
+episode_stats(
+    ukr_aligned,
+    CF_factor_adjusted,
+    "2022-02-01",
+    "2023-09-30",
+    "Full-scale invasion 2022",
 )
 
 if svar_available:
     print("\n--- METHODE 2 : SVAR Blanchard-Quah ---")
+    print(
+        f"\n  DEBUG cf_svar_inf: {cf_svar_inf.index[0].date()} → "
+        f"{cf_svar_inf.index[-1].date()}, T={len(cf_svar_inf)}"
+    )
+    print(f"  DEBUG index fréquence: {pd.infer_freq(cf_svar_inf.index)}")
+    print(f"  DEBUG valeur 2008-09: {cf_svar_inf.get('2008-09-01', 'ABSENT')}")
+    print(f"  DEBUG valeur 2014-02: {cf_svar_inf.get('2014-02-01', 'ABSENT')}")
     # ukraine_yoy plein échantillon pour couvrir GFC 2008 et Crimée 2014
     episode_stats(ukraine_yoy, cf_svar_inf, "2008-09-01", "2009-06-30", "GFC 2008-09")
     episode_stats(
