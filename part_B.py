@@ -761,13 +761,6 @@ episode_stats(
 
 if svar_available:
     print("\n--- METHODE 2 : SVAR Blanchard-Quah ---")
-    print(
-        f"\n  DEBUG cf_svar_inf: {cf_svar_inf.index[0].date()} → "
-        f"{cf_svar_inf.index[-1].date()}, T={len(cf_svar_inf)}"
-    )
-    print(f"  DEBUG index fréquence: {pd.infer_freq(cf_svar_inf.index)}")
-    print(f"  DEBUG valeur 2008-09: {cf_svar_inf.get('2008-09-01', 'ABSENT')}")
-    print(f"  DEBUG valeur 2014-02: {cf_svar_inf.get('2014-02-01', 'ABSENT')}")
     # ukraine_yoy plein échantillon pour couvrir GFC 2008 et Crimée 2014
     episode_stats(ukraine_yoy, cf_svar_inf, "2008-09-01", "2009-06-30", "GFC 2008-09")
     episode_stats(
