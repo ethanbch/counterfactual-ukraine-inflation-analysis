@@ -1,0 +1,15 @@
+[project]
+name = "qmf-final-project"
+version = "0.1.0"
+description = "Counterfactual inflation analysis: What if Ukraine had been part of the Euro Area?"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "scikit-learn>=1.4",
+    "statsmodels>=0.14",
+    "requests>=2.31",
+    "ipykernel>=6.25",
+]
