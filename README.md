@@ -105,7 +105,7 @@ All external data is downloaded programmatically at runtime — no manual interv
 Requires **Python >= 3.12**.
 
 ```bash
-git clone https://github.com/<your-username>/qmf_final_project.git
+git clone https://github.com/ethanbch/qmf_final_project.git
 cd qmf_final_project
 ```
 
